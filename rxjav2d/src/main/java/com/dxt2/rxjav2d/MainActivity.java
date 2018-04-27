@@ -42,12 +42,11 @@ public class MainActivity extends AppCompatActivity {
 //         rxjavaUse33();//，模拟网络请求retrofit+rxjava(未完成)
 //        rxjavaUse111();//Map
 //        rxjavaUse222();FlatMap
-        rxjava1111();//zip
-        rxjava2222();//flowable backpressure背压
-
+//        rxjava1111();//zip
+//        rxjava2222();
+//        rxjava3333(); 上下游异步io()造成oom的解决方案
+        rxjava4444(); //Flowable
     }
-
-
 
 
     /*ObservableEmitter用来发出事件的,通过调用emitter的onNext(T value)、onComplete()和onError(Throwable error)就可以分别发出next事件、complete事件和error事件
@@ -237,6 +236,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     //在子线程中做耗时的操作, 然后回到主线程中来操作UI,
+
+    // subscribeOn() 指定的是上游发送事件的线程, observeOn() 指定的是下游接收事件的线程.
     /*多次指定上游的线程只有第一次指定的有效, 也就是说多次调用subscribeOn() 只有第一次的有效, 其余的会被忽略.
     * 多次指定下游的线程是可以的, 也就是说每调用一次observeOn() , 下游的线程就会切换一次.
     * */
@@ -275,9 +276,9 @@ public class MainActivity extends AppCompatActivity {
         //====: onNext: 1
 
         //3
-        observable.subscribeOn(Schedulers.newThread())
-                .subscribeOn(Schedulers.io())
-                .observeOn(AndroidSchedulers.mainThread())
+        observable.subscribeOn(Schedulers.newThread()) //subscribeOn() 指定的是上游发送事件的线程
+                .subscribeOn(Schedulers.io())  //
+                .observeOn(AndroidSchedulers.mainThread()) //observeOn() 指定的是下游接收事件的线程.
                 .doOnNext(new Consumer<Integer>() {
                     @Override
                     public void accept(Integer integer) throws Exception {
@@ -355,12 +356,18 @@ public class MainActivity extends AppCompatActivity {
                 Log.d("====", s);
             } // Iamvalue1  Iamvalue1   Iamvalue1   Iamvalue2 Iamvalue2 Iamvalue2  Iamvalue3  Iamvalue3  Iamvalue3
         });
-
     }
 
     //Zip通过一个函数将多个Observable发送的事件结合到一起，然后发送这些组合到一起的事件. 它按照严格的顺序应用这个函数
+
+    //如果让水管都在IO线程里发送事件 ,两根水管同时开始发送, 每发送一个, Zip就组合一个, 再将组合结果发送给下游.
+//         onSubscribe  emit A  emit 1  onNext: 1A
+//         emit B  emit 2  onNext: 2B
+//         emit C  emit 3  onNext: 3C
+//         emit  complete2  onComplete
+
     private void rxjava1111() {
-     //因为我们两根水管都是运行在同一个线程里, 同一个线程里执行代码肯定有先后顺序呀.
+        //因为我们两根水管都是运行在同一个线程里, 同一个线程里执行代码肯定有先后顺序.
         Observable<Integer> observable1 = Observable.create(new ObservableOnSubscribe<Integer>() {
             @Override
             public void subscribe(ObservableEmitter<Integer> emitter) throws Exception {
@@ -369,7 +376,7 @@ public class MainActivity extends AppCompatActivity {
                 Log.d("====", "emit 2");
                 emitter.onNext(2);
                 Log.d("====", "emit 3");
-                emitter.onNext(3);
+                emitter.onNext(3);//每次调用emitter.onNext（），其实相当于调用了Consumer中的accept()
                 Log.d("====", "emit 4");
                 emitter.onNext(4);
                 Log.d("====", "emit complete1");
@@ -417,30 +424,80 @@ public class MainActivity extends AppCompatActivity {
                 Log.d("====", "onComplete");
             }
         });//onSubscribe   emit 1  emit 2  emit 3   emit 4  emit complete1
-         //emit A  onNext: 1A  emit B  onNext: 2B  emit C  onNext: 3C  emit complete2  onComplete
-
-   //如果让水管都在IO线程里发送事件
-//         onSubscribe  emit A  emit 1  onNext: 1A
-//         emit B  emit 2  onNext: 2B
-//         emit C  emit 3  onNext: 3C
-//         emit  complete2  onComplete
-
+        //emit A  onNext: 1A  emit B  onNext: 2B  emit C  onNext: 3C  emit complete2  onComplete
     }
-   //只使用Observable如何去解决上下游流速不均衡的问题
-    //当上下游工作在同一个线程中时, 这时候是一个同步的订阅关系, (正常)也就是说上游每发送一个事件必须等到下游接收处理完了以后才能接着发送下一个事件
-    //当上下游工作在不同的线程中时, 这时候是一个异步的订阅关系,（oom） 这个时候上游发送数据不需要等待下游接收,
 
-//    这个时候把上游切换到了IO线程中去, 下游到主线程去接收,
 
-    // new Predicate<Integer>() 通过减少进入水缸的事件数量的确可以缓解上下游流速不均衡的问题,(减少放进水缸的事件的数量,丢失了大部分的事件)
-    //用一个sample操作符，这个操作符每隔指定的时间就从上游中取出一个事件发送给下游.
+    //如果上下游都工作在子线程中， 上游 发送的数据n多个，那么就造成oom，故引入Backpressure（为了控制流量）
+    private void rxjava2222() {
+        Observable.create(new ObservableOnSubscribe<Integer>() {
+            @Override
+            public void subscribe(ObservableEmitter<Integer> e) throws Exception {
+                for (int i = 0; ; i++) {
+                    e.onNext(i);
+                }
+            }
+        }).subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(new Consumer<Integer>() {
+                    @Override
+                    public void accept(Integer integer) throws Exception {
+                        Log.d("====", "" + integer);
+                    }
+                });
+    }
 
+    //1当上下游工作在同一个线程中时, 这时候是一个同步的订阅关系,
+    // (正常)也就是说上游每发送一个事件必须等到下游接收处理完了以后才能接着发送下一个事件
+    /// 因为 每次调用emitter.onNext（），其实相当于调用了Consumer中的accept()
+//   2.如果把上游切换到了IO线程中去, 下游到主线程去接收,oom
+    //当上下游工作在不同的线程中时, 这时候是一个异步的订阅关系,
+    // （oom） 这个时候上游发送数据不需要等待下游接收,
+
+    //只使用Observable如何去解决上下游流速不均衡的问题
+
+    // 1.new Predicate<Integer>() 通过减少进入水缸的事件数量的确可以缓解上下游流速不均衡的问题,(减少放进水缸的事件的数量,丢失了大部分的事件)
+    // 2用一个sample操作符，这个操作符每隔指定的时间就从上游中取出一个事件发送给下游.
+    //以上两种丢失大量的事件
     //,sleep 既然上游发送事件的速度太快, 那我们就适当减慢发送事件的速度, 从速度上取胜
 
+    private void rxjava3333() {
+        Observable<Integer> observable1 = Observable.create(new ObservableOnSubscribe<Integer>() {
+            @Override
+            public void subscribe(ObservableEmitter<Integer> e) throws Exception {
+                for (int i = 0; i < 200; i++) {
+                    e.onNext(i);
+                }
+            }
+        }).subscribeOn(Schedulers.io()).sample(2, TimeUnit.SECONDS);
+
+        Observable<String> observable2 = Observable.create(new ObservableOnSubscribe<String>() {
+            @Override
+            public void subscribe(ObservableEmitter<String> e) throws Exception {
+                e.onNext("A");
+            }
+        }).subscribeOn(Schedulers.io());
+        Observable.zip(observable1, observable2, new BiFunction<Integer, String, String>() {
+            @Override
+            public String apply(Integer integer, String s) throws Exception {
+                return integer + s;
+            }
+        }).observeOn(AndroidSchedulers.mainThread())
+                .subscribe(new Consumer<String>() {
+                    @Override
+                    public void accept(String s) throws Exception {
+                        Log.d("====", s);
+                    }
+                });
+
+    }
 
     //上游和下游分别是Observable和Observer,
     // 这次不一样的是上游变成了Flowable, 下游变成了Subscriber
-    private void rxjava2222() {
+    //下游的onSubscribe方法中传给我们的不再是Disposable了,而是Subscription,
+// 之前我们说调用Disposable.dispose()方法可以切断水管, 同样的调用Subscription.cancel()也可以切断水管,
+//不同的地方在于Subscription增加了一个void request(long n)方法, 这个方法有什么用呢
+    private void rxjava4444() {
         Flowable<Integer> upstream = Flowable.create(new FlowableOnSubscribe<Integer>() {
             @Override
             public void subscribe(FlowableEmitter<Integer> emitter) throws Exception {
@@ -478,11 +535,29 @@ public class MainActivity extends AppCompatActivity {
             }
         };
         upstream.subscribe(downstream);
-    //onSubscribe    emit 1  onNext: 1  emit 2  onNext: 2  emit 3  onNext: 3    emit complete onComplete
-    //去掉   s.request(Long.MAX_VALUE); 出现MissingBackpressureException
-    //写成异步onSubscrib emit 1  emit 2  emit 3 emit complete 上游正确的发送了所有的事件, 但是下游一个事件也没有收到（因为在Flowable里默认有一个大小为128的水缸）
-    //把request当做是一种能力, 当成下游处理事件的能力, 下游能处理几个就告诉上游我要几个, 这样只要上游根据下游的处理能力来决定发送多少事件
+        //onSubscribe    emit 1  onNext: 1  emit 2  onNext: 2  emit 3  onNext: 3    emit complete onComplete
+        //
+        /*同步的话   去掉s.request(Long.MAX_VALUE); 出现MissingBackpressureException
+         下游没有调用request, 上游就认为下游没有处理事件的能力, 而这又是一个同步的订阅,
+         既然下游处理不了, 那上游不可能一直等待吧,既然下游处理不了, 那上游不可能一直等待吧,
+         如果是这样, 万一这两根水管工作在主线程里, 界面不就卡死了吗, 因此只能抛个异常来提醒我们
+
+         异步的话  上下游没有工作在同一个线程时, 上游却正确的发送了所有的事件呢?
+         这是因为在Flowable里默认有一个大小为128的水缸, 当上下游工作在不同的线程中时,上游就会先把事件发送到这个水缸中,
+         因此, 下游虽然没有调用request, 但是上游在水缸中保存着这些事件, 只有当下游调用request时, 才从水缸里取出事件发给下游.
+        */
+
+        //写成异步onSubscrib emit 1  emit 2  emit 3 emit complete 上游正确的发送了所有的事件, 但是下游一个事件也没有收到（因为在Flowable里默认有一个大小为128的水缸）
+        //把request当做是一种能力, 当成下游处理事件的能力, 下游能处理几个就告诉上游我要几个, 这样只要上游根据下游的处理能力来决定发送多少事件
+
+//       发送超过128就会抛出MissingBackpressureException异常
+        //换成 BackpressureStrategy.BUFFER ，上游数量无限多，会造成oom
+        //如何解决上游发送事件太快，对应的就是BackpressureStrategy.DROP和BackpressureStrategy.LATEST这两种策略.
+        //BackpressureStrategy.DROP 直接把存不下的事件丢弃
+        //Latest就是只保留最新的事件
     }
+
+
 }
 
 

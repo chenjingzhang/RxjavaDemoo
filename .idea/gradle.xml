@@ -10,6 +10,7 @@
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/app" />
             <option value="$PROJECT_DIR$/rxjav2d" />
+            <option value="$PROJECT_DIR$/rxjavandretro" />
           </set>
         </option>
         <option name="resolveModulePerSourceSet" value="false" />

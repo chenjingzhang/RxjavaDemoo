@@ -1,1 +1,1 @@
-include ':app', ':rxjav2d'
+include ':app', ':rxjav2d', ':rxjavandretro'
